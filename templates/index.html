@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SignBridge</title>
+
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+
+<body>
+
+<div class="app">
+
+    <header class="header">
+        <div class="logo">SignBridge</div>
+        <div class="live-indicator">
+            <div class="dot"></div>
+            AI Live
+        </div>
+    </header>
+
+    <div class="video-grid">
+
+        <div class="video-card">
+            <video id="localVideo" autoplay playsinline muted></video>
+            <canvas id="output_canvas"></canvas>
+
+            <div id="subtitleOverlay" class="subtitle">
+                Waiting...
+            </div>
+
+            <div class="confidence-bar-container">
+                <div id="confidenceBar" class="confidence-bar"></div>
+            </div>
+        </div>
+
+        <div class="video-card">
+            <video id="remoteVideo" autoplay playsinline></video>
+        </div>
+
+    </div>
+
+    <div class="controls">
+
+        <input type="text" id="roomInput" placeholder="Room ID">
+        <button onclick="joinRoom()">Join Call</button>
+
+        <button onclick="clearSentence()">Clear</button>
+        <button onclick="speakSentence()">Speak</button>
+        <button onclick="startSpeech()">Voice</button>
+
+    </div>
+
+    <div class="sentence-panel">
+        <div id="sentenceBox"></div>
+    </div>
+
+    <div id="predictionText" class="prediction-box"></div>
+
+</div>
+
+<script src="{{ url_for('static', filename='script.js') }}"></script>
+
+</body>
+</html>
