@@ -1,4 +1,8 @@
 .venv/
 __pycache__/
-*.pkl
+*.pyc
 node_modules/
+gesture_data_backup.csv
+confusion_matrix.png
+cleanup_data.py
+.DS_Store

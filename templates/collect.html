@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SignBridge | Data Collection</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background: #050510;
+            color: #f4f4f5;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 800;
+        }
+
+        .header h1 span {
+            color: #6366f1;
+        }
+
+        .header a {
+            color: #a5b4fc;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 600;
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            padding: 8px 16px;
+            border-radius: 10px;
+        }
+
+        .header a:hover {
+            background: rgba(99, 102, 241, 0.1);
+        }
+
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            gap: 24px;
+        }
+
+        .video-box {
+            position: relative;
+            border-radius: 20px;
+            overflow: hidden;
+            background: #09090b;
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            aspect-ratio: 4/3;
+        }
+
+        .video-box video,
+        .video-box canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        .video-box canvas {
+            pointer-events: none;
+            z-index: 2;
+        }
+
+        .status-bar {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 3;
+            padding: 16px 20px;
+            background: linear-gradient(transparent, rgba(0, 0, 0, 0.9));
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .status-bar .hands-detected {
+            font-size: 13px;
+            color: #a1a1aa;
+        }
+
+        .status-bar .hands-detected.active {
+            color: #22c55e;
+        }
+
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .panel {
+            background: rgba(9, 9, 11, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 20px;
+            padding: 20px;
+            backdrop-filter: blur(16px);
+        }
+
+        .panel h3 {
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #a5b4fc;
+            margin-bottom: 12px;
+            font-weight: 800;
+        }
+
+        .gesture-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 6px;
+            max-height: 320px;
+            overflow-y: auto;
+        }
+
+        .gesture-btn {
+            padding: 10px 4px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.03);
+            color: #f4f4f5;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.15s;
+        }
+
+        .gesture-btn:hover {
+            background: rgba(99, 102, 241, 0.15);
+            border-color: rgba(99, 102, 241, 0.4);
+        }
+
+        .gesture-btn.selected {
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            border-color: #6366f1;
+            color: #fff;
+            box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
+        }
+
+        .gesture-btn .count {
+            display: block;
+            font-size: 10px;
+            color: #a1a1aa;
+            margin-top: 2px;
+            font-weight: 400;
+        }
+
+        .gesture-btn.selected .count {
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .record-section {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .selected-label {
+            font-size: 28px;
+            font-weight: 800;
+            text-align: center;
+            color: #fff;
+            padding: 8px;
+            background: rgba(99, 102, 241, 0.1);
+            border-radius: 12px;
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            min-height: 52px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .selected-label.empty {
+            font-size: 14px;
+            color: #52525b;
+            font-weight: 500;
+        }
+
+        .record-btn {
+            padding: 14px;
+            border-radius: 14px;
+            border: none;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .record-btn.start {
+            background: linear-gradient(135deg, #22c55e, #16a34a);
+            color: #fff;
+            box-shadow: 0 4px 15px rgba(34, 197, 94, 0.3);
+        }
+
+        .record-btn.start:hover {
+            box-shadow: 0 6px 20px rgba(34, 197, 94, 0.5);
+            transform: translateY(-1px);
+        }
+
+        .record-btn.stop {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: #fff;
+            box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);
+        }
+
+        .record-btn.start:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.06);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #6366f1, #8b5cf6);
+            border-radius: 3px;
+            transition: width 0.1s;
+            width: 0%;
+        }
+
+        .stats {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            color: #a1a1aa;
+        }
+
+        .stats .total {
+            color: #22c55e;
+            font-weight: 600;
+        }
+
+        .log {
+            font-size: 12px;
+            color: #a1a1aa;
+            max-height: 80px;
+            overflow-y: auto;
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+        }
+
+        .log .entry {
+            padding: 2px 0;
+        }
+
+        .log .entry.success {
+            color: #22c55e;
+        }
+
+        .retrain-btn {
+            width: 100%;
+            padding: 14px;
+            border-radius: 14px;
+            border: none;
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: #fff;
+            box-shadow: 0 4px 15px rgba(245, 158, 11, 0.3);
+            transition: all 0.2s;
+        }
+
+        .retrain-btn:hover {
+            box-shadow: 0 6px 20px rgba(245, 158, 11, 0.5);
+            transform: translateY(-1px);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤟 Sign<span>Bridge</span> — Data Collector</h1>
+            <a href="/">← Back to App</a>
+        </div>
+
+        <div class="main-grid">
+            <div class="video-box">
+                <video id="video" autoplay playsinline muted></video>
+                <canvas id="canvas"></canvas>
+                <div class="status-bar">
+                    <div id="handsStatus" class="hands-detected">No hands detected</div>
+                    <div id="liveCoords" style="font-size: 11px; color: #52525b;">—</div>
+                </div>
+            </div>
+
+            <div class="controls">
+                <div class="panel">
+                    <h3>Select Gesture</h3>
+                    <div id="gestureGrid" class="gesture-grid"></div>
+                </div>
+
+                <div class="panel record-section">
+                    <h3>Recording</h3>
+                    <div id="selectedLabel" class="selected-label empty">Pick a gesture above</div>
+                    <div class="progress-bar">
+                        <div id="progressFill" class="progress-fill"></div>
+                    </div>
+                    <div class="stats">
+                        <span id="sampleCount">0 / 50 samples</span>
+                        <span id="totalSamples" class="total">Total: 0</span>
+                    </div>
+                    <button id="recordBtn" class="record-btn start" disabled onclick="toggleRecording()">
+                        ● Start Recording (50 samples)
+                    </button>
+                    <div id="log" class="log"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ==============================
+        // GESTURES LIST
+        // ==============================
+        const GESTURES = [
+            'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
+            'N', 'O', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
+            '1', '3', '4', '7', '8',
+            'HELLO', 'HELP', 'STOP', 'YES', 'NO', 'SORRY', 'GOODBYE',
+            'HOME', 'HUG', 'MEET', 'NICE', 'CHANGE', 'CORRECT', 'TOUCH', 'YOU'
+        ];
+
+        let currentLabel = null;
+        let isRecording = false;
+        let samplesCollected = 0;
+        let totalSamples = 0;
+        const SAMPLES_PER_GESTURE = 200;
+        let latestLandmarks = null;
+        let recordingInterval = null;
+        let gestureCounts = {};
+
+        // ==============================
+        // BUILD GESTURE GRID
+        // ==============================
+        const grid = document.getElementById('gestureGrid');
+        GESTURES.forEach(g => {
+            gestureCounts[g] = 0;
+            const btn = document.createElement('button');
+            btn.className = 'gesture-btn';
+            btn.id = 'gbtn_' + g;
+            btn.innerHTML = `${g}<span class="count">0</span>`;
+            btn.onclick = () => selectGesture(g);
+            grid.appendChild(btn);
+        });
+
+        function selectGesture(label) {
+            currentLabel = label;
+            document.querySelectorAll('.gesture-btn').forEach(b => b.classList.remove('selected'));
+            document.getElementById('gbtn_' + label).classList.add('selected');
+
+            const el = document.getElementById('selectedLabel');
+            el.textContent = label;
+            el.classList.remove('empty');
+
+            document.getElementById('recordBtn').disabled = false;
+            samplesCollected = 0;
+            updateProgress();
+        }
+
+        function updateProgress() {
+            document.getElementById('sampleCount').textContent = `${samplesCollected} / ${SAMPLES_PER_GESTURE} samples`;
+            document.getElementById('progressFill').style.width = `${(samplesCollected / SAMPLES_PER_GESTURE) * 100}%`;
+            document.getElementById('totalSamples').textContent = `Total: ${totalSamples}`;
+        }
+
+        function addLog(msg, isSuccess) {
+            const log = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = 'entry' + (isSuccess ? ' success' : '');
+            entry.textContent = msg;
+            log.prepend(entry);
+            if (log.children.length > 30) log.removeChild(log.lastChild);
+        }
+
+        // ==============================
+        // RECORDING
+        // ==============================
+        function toggleRecording() {
+            if (isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+        }
+
+        function startRecording() {
+            if (!currentLabel) {
+                addLog("⚠ Select a gesture first!", false);
+                return;
+            }
+
+            // Disable button during countdown
+            const btn = document.getElementById('recordBtn');
+            btn.disabled = true;
+
+            let countdown = 5;
+            const label = document.getElementById('selectedLabel');
+            addLog(`⏳ Get ready for "${currentLabel}"... ${countdown}s`, false);
+            label.textContent = `${countdown}...`;
+
+            const countdownInterval = setInterval(() => {
+                countdown--;
+                if (countdown > 0) {
+                    label.textContent = `${countdown}...`;
+                    addLog(`⏳ ${countdown}...`, false);
+                } else {
+                    clearInterval(countdownInterval);
+                    label.textContent = `🔴 ${currentLabel}`;
+                    actuallyStartRecording();
+                }
+            }, 1000);
+        }
+
+        function actuallyStartRecording() {
+            isRecording = true;
+            samplesCollected = 0;
+            updateProgress();
+
+            const btn = document.getElementById('recordBtn');
+            btn.disabled = false;
+            btn.className = 'record-btn stop';
+            btn.textContent = '■ Stop Recording';
+
+            addLog(`🔴 NOW RECORDING "${currentLabel}" — hold your sign!`, false);
+
+            // Save a sample every 100ms (10 samples/sec)
+            recordingInterval = setInterval(() => {
+                if (samplesCollected >= SAMPLES_PER_GESTURE) {
+                    stopRecording();
+                    return;
+                }
+                if (latestLandmarks) {
+                    saveSample();
+                }
+            }, 100);
+        }
+
+        function stopRecording() {
+            isRecording = false;
+            clearInterval(recordingInterval);
+
+            const btn = document.getElementById('recordBtn');
+            btn.className = 'record-btn start';
+            btn.textContent = `● Start Recording (${SAMPLES_PER_GESTURE} samples)`;
+
+            addLog(`✅ Saved ${samplesCollected} samples for "${currentLabel}"`, true);
+
+            // Update the count on the gesture button
+            gestureCounts[currentLabel] = (gestureCounts[currentLabel] || 0) + samplesCollected;
+            const gbtn = document.getElementById('gbtn_' + currentLabel);
+            gbtn.querySelector('.count').textContent = gestureCounts[currentLabel];
+        }
+
+        async function saveSample() {
+            if (!latestLandmarks) return;
+
+            try {
+                const res = await fetch('/save_sample', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        landmarks: latestLandmarks,
+                        label: currentLabel
+                    })
+                });
+
+                if (res.ok) {
+                    samplesCollected++;
+                    totalSamples++;
+                    updateProgress();
+                }
+            } catch (err) {
+                console.error("Save error:", err);
+            }
+        }
+
+        // ==============================
+        // MEDIAPIPE HANDS
+        // ==============================
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        async function startCamera() {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            video.srcObject = stream;
+
+            const hands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+
+            hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.7,
+                minTrackingConfidence: 0.7
+            });
+
+            hands.onResults(onResults);
+
+            const camera = new Camera(video, {
+                onFrame: async () => { await hands.send({ image: video }); },
+                width: 640,
+                height: 480
+            });
+            camera.start();
+
+            canvas.width = 640;
+            canvas.height = 480;
+        }
+
+        function onResults(results) {
+            ctx.save();
+            ctx.clearRect(0, 0, 640, 480);
+
+            const statusEl = document.getElementById('handsStatus');
+            const coordsEl = document.getElementById('liveCoords');
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const sortedHands = results.multiHandLandmarks.sort((a, b) => a[0].x - b[0].x);
+                let frameData = [];
+
+                for (const landmarks of sortedHands) {
+                    drawConnectors(ctx, landmarks, HAND_CONNECTIONS, { color: '#6366f1', lineWidth: 2 });
+                    drawLandmarks(ctx, landmarks, { color: '#ffffff', lineWidth: 1, radius: 3 });
+                    for (let i = 0; i < landmarks.length; i++) {
+                        frameData.push(landmarks[i].x, landmarks[i].y, landmarks[i].z);
+                    }
+                }
+
+                while (frameData.length < 126) frameData.push(0);
+                latestLandmarks = frameData;
+
+                statusEl.textContent = `${sortedHands.length} hand(s) detected ✓`;
+                statusEl.classList.add('active');
+                coordsEl.textContent = `wrist: (${frameData[0].toFixed(2)}, ${frameData[1].toFixed(2)})`;
+            } else {
+                latestLandmarks = null;
+                statusEl.textContent = 'No hands detected';
+                statusEl.classList.remove('active');
+                coordsEl.textContent = '—';
+            }
+
+            ctx.restore();
+        }
+
+        startCamera();
+    </script>
+</body>
+
+</html>

@@ -1,70 +1,173 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
+
 <head>
-    <title>SignBridge</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SignBridge | AI Sign Language Communication</title>
 
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
 
+    <!-- MediaPipe -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
 </head>
 
 <body>
 
-<div class="app">
+    <div class="app-container">
+        <header class="header">
+            <div class="logo-group">
+                <i data-lucide="hand-metal" style="color: #6366f1; width: 28px; height: 28px;"></i>
+                <div class="logo-text">SignBridge</div>
+                <div class="status-badge">
+                    <div class="status-dot"></div>
+                    AI Live Engine
+                </div>
+            </div>
+            <div id="connectionStatus" class="status-badge"
+                style="background: rgba(239, 68, 68, 0.1); color: #ef4444; border-color: rgba(239, 68, 68, 0.2);">
+                Disconnected
+            </div>
+        </header>
 
-    <header class="header">
-        <div class="logo">SignBridge</div>
-        <div class="live-indicator">
-            <div class="dot"></div>
-            AI Live
-        </div>
-    </header>
+        <div class="main-layout">
+            <div class="video-section">
+                <div class="overlay-label">Translator View</div>
+                <video id="localVideo" autoplay playsinline muted></video>
+                <canvas id="output_canvas"></canvas>
 
-    <div class="video-grid">
-
-        <div class="video-card">
-            <video id="localVideo" autoplay playsinline muted></video>
-            <canvas id="output_canvas"></canvas>
-
-            <div id="subtitleOverlay" class="subtitle">
-                Waiting...
+                <div class="subtitle-box">
+                    <div id="predictionText" class="prediction-main">Detecting...</div>
+                    <div class="confidence-wrapper">
+                        <div id="confidenceBar" class="confidence-fill"></div>
+                    </div>
+                    <div id="subtitleOverlay" style="font-size: 14px; color: var(--text-dim); margin-top: 8px;">Waiting
+                        for gesture...</div>
+                </div>
             </div>
 
-            <div class="confidence-bar-container">
-                <div id="confidenceBar" class="confidence-bar"></div>
+            <div class="video-section" id="remoteCard">
+                <div class="overlay-label">Remote Participant</div>
+                <video id="remoteVideo" autoplay playsinline></video>
+                <div id="remoteOverlay" onclick="unlockRemoteVideo()" style="
+                position:absolute; top:0; left:0; width:100%; height:100%;
+                display:flex; flex-direction:column; align-items:center; justify-content:center;
+                background:rgba(15, 23, 42, 0.9); color:white; font-size:18px;
+                cursor:pointer; z-index:10; gap: 16px;
+            ">
+                    <i data-lucide="play-circle" style="width: 48px; height: 48px; color: var(--primary);"></i>
+                    <span>Click to join stream</span>
+                </div>
             </div>
         </div>
 
-        <div class="video-card">
-            <video id="remoteVideo" autoplay playsinline></video>
+        <div class="control-hub">
+            <div class="session-controls">
+                <div class="media-toggles">
+                    <button id="micBtn" onclick="toggleMic()" class="btn btn-secondary btn-circle"
+                        title="Toggle Microphone">
+                        <i data-lucide="mic"></i>
+                    </button>
+                    <button id="camBtn" onclick="toggleCamera()" class="btn btn-secondary btn-circle"
+                        title="Toggle Camera">
+                        <i data-lucide="video"></i>
+                    </button>
+                </div>
+
+                <div class="input-group">
+                    <input type="text" id="roomInput" placeholder="Enter Room Code...">
+                    <button onclick="copyRoomCode()" class="btn btn-secondary"
+                        style="border:none; border-radius: 0; border-left: 1px solid #3f3f46;" title="Copy Code">
+                        <i data-lucide="copy" style="width:16px;"></i>
+                    </button>
+                    <button onclick="generateRoomCode()" class="btn btn-secondary"
+                        style="border:none; border-radius: 0 12px 12px 0;">New</button>
+                </div>
+
+                <div class="action-buttons">
+                    <button id="joinBtn" onclick="joinRoom()" class="btn btn-primary">
+                        <i data-lucide="phone-forwarded"></i> Join Call
+                    </button>
+                    <button id="leaveBtn" onclick="leaveRoom()" class="btn btn-off" style="display: none;">
+                        <i data-lucide="phone-off"></i> Leave
+                    </button>
+                </div>
+            </div>
+
+            <div class="bottom-panels">
+                <div class="transcript-panel panel-container">
+                    <div class="transcript-label"><i data-lucide="languages" style="width: 14px;"></i> Live Translation
+                    </div>
+                    <div
+                        style="display: flex; justify-content: space-between; align-items: center; gap: 20px; height: 100%;">
+                        <div id="sentenceBox"
+                            style="flex: 1; font-size: 22px; font-weight: 600; color: #fff; line-height: 1.5; overflow-y: auto; max-height: 140px;">
+                            Waiting for results...</div>
+                        <div
+                            style="display: flex; flex-direction: column; gap: 12px; padding-left: 16px; border-left: 1px solid rgba(255,255,255,0.06);">
+                            <div style="display: flex; gap: 12px;">
+                                <button id="voiceBtn" onclick="toggleSpeech()" class="btn btn-secondary btn-circle"
+                                    title="Voice to Text" style="width: 44px; height: 44px;">
+                                    <i data-lucide="mic-vocal" style="width: 20px;"></i>
+                                </button>
+                                <button onclick="speakSentence()" class="btn btn-secondary btn-circle"
+                                    title="Speak Sentence" style="width: 44px; height: 44px;">
+                                    <i data-lucide="volume-2" style="width: 20px;"></i>
+                                </button>
+                            </div>
+                            <div style="display: flex; gap: 12px;">
+                                <button onclick="copyTranscript()" class="btn btn-secondary btn-circle"
+                                    title="Copy Transcript" style="width: 44px; height: 44px;">
+                                    <i data-lucide="clipboard" style="width: 20px;"></i>
+                                </button>
+                                <button onclick="clearSentence()" class="btn btn-secondary btn-circle" title="Clear All"
+                                    style="width: 44px; height: 44px; color: #ef4444; border-color: rgba(239,68,68,0.3);">
+                                    <i data-lucide="trash-2" style="width: 20px;"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="chat-panel panel-container">
+                    <div class="transcript-label"><i data-lucide="message-square" style="width: 14px;"></i> Room Chat
+                    </div>
+                    <button onclick="clearChatMessages()" class="btn btn-secondary btn-circle" title="Clear Chat"
+                        style="position: absolute; top: 12px; right: 16px; width: 32px; height: 32px; z-index: 10; background: transparent; border: none;">
+                        <i data-lucide="trash-2" style="width: 16px; color: #a1a1aa;"></i>
+                    </button>
+                    <div id="chatMessages" class="chat-messages"></div>
+                    <div class="chat-input-group">
+                        <button id="chatMicBtn" onclick="toggleChatSpeech()" class="btn btn-secondary btn-circle"
+                            style="width: 32px; height: 32px; background: transparent; border: none; color: #a1a1aa; padding: 0; margin-right: 4px;"
+                            title="Voice Dictation">
+                            <i data-lucide="mic" style="width: 16px;"></i>
+                        </button>
+                        <input type="text" id="chatInput" placeholder="Send a message..."
+                            onkeypress="handleChatKey(event)">
+                        <button onclick="sendChatMessage()" class="btn btn-primary btn-circle"
+                            style="width: 36px; height: 36px;">
+                            <i data-lucide="send" style="width: 16px;"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
         </div>
-
     </div>
 
-    <div class="controls">
-
-        <input type="text" id="roomInput" placeholder="Room ID">
-        <button onclick="joinRoom()">Join Call</button>
-
-        <button onclick="clearSentence()">Clear</button>
-        <button onclick="speakSentence()">Speak</button>
-        <button onclick="startSpeech()">Voice</button>
-
-    </div>
-
-    <div class="sentence-panel">
-        <div id="sentenceBox"></div>
-    </div>
-
-    <div id="predictionText" class="prediction-box"></div>
-
-</div>
-
-<script src="{{ url_for('static', filename='script.js') }}"></script>
+    <script src="/static/script.js"></script>
+    <script>
+        // Initialize Lucide Icons
+        lucide.createIcons();
+    </script>
 
 </body>
+
 </html>

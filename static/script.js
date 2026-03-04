@@ -2,14 +2,18 @@
 // GLOBAL VARIABLES
 // ===============================
 
-let dataset = [];
-let collecting = false;
-let currentLabel = "";
-
 let sentence = "";
 let lastWord = "";
-
 let localStream;
+let currentRoom = null;
+let peerConnection = null;
+let socket = null;
+let isMicOn = true;
+let isCamOn = true;
+let isSpeechOn = false;
+let isChatSpeechOn = false;
+let recognition = null;
+let chatRecognition = null;
 
 const localVideo = document.getElementById("localVideo");
 const remoteVideo = document.getElementById("remoteVideo");
@@ -19,343 +23,518 @@ const canvasCtx = canvasElement.getContext("2d");
 canvasElement.width = 640;
 canvasElement.height = 480;
 
+const config = {
+    iceServers: [
+        { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }
+    ]
+};
 
 // ===============================
-// START CAMERA + MEDIAPIPE
+// INITIALIZATION
 // ===============================
 
 async function startVideo() {
+    try {
+        localStream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: true
+        });
 
-    localStream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true
-    });
+        localVideo.srcObject = localStream;
 
-    localVideo.srcObject = localStream;
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
 
-    const hands = new Hands({
-        locateFile: (file) => {
-            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-        }
-    });
+        hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.7
+        });
 
-    hands.setOptions({
-        maxNumHands: 2,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.7,
-        minTrackingConfidence: 0.7
-    });
+        hands.onResults(onResults);
 
-    hands.onResults(onResults);
+        const camera = new Camera(localVideo, {
+            onFrame: async () => {
+                await hands.send({ image: localVideo });
+            },
+            width: 640,
+            height: 480
+        });
 
-    const camera = new Camera(localVideo, {
-        onFrame: async () => {
-            await hands.send({ image: localVideo });
-        },
-        width: 640,
-        height: 480
-    });
+        camera.start();
+        initSpeechRecognition();
 
-    camera.start();
+    } catch (err) {
+        console.error("Camera error:", err);
+        alert("Camera permission denied. Please allow access to use SignBridge.");
+    }
 }
 
 startVideo();
 
-
 // ===============================
-// COLLECTION CONTROLS
-// ===============================
-
-function startCollect() {
-
-    const labelInput = document.getElementById("labelInput");
-
-    if (!labelInput.value) {
-        alert("Enter a label first!");
-        return;
-    }
-
-    currentLabel = labelInput.value;
-    collecting = true;
-
-    document.getElementById("status").innerText =
-        "Collecting for: " + currentLabel;
-}
-
-function stopCollect() {
-    collecting = false;
-    document.getElementById("status").innerText = "Stopped";
-}
-
-
-// ===============================
-// MEDIAPIPE RESULTS
+// MEDIAPIPE + PREDICTION
 // ===============================
 
 function onResults(results) {
-
     canvasCtx.save();
-    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-    canvasCtx.drawImage(results.image, 0, 0, 640, 480);
+    canvasCtx.clearRect(0, 0, 640, 480);
 
-    let frameData = [];
-
-    if (results.multiHandLandmarks &&
-        results.multiHandLandmarks.length > 0) {
-
-        const sortedHands = results.multiHandLandmarks.sort(
-            (a, b) => a[0].x - b[0].x
-        );
+    // We only draw landmark connections for clarity
+    if (results.multiHandLandmarks) {
+        const sortedHands = results.multiHandLandmarks.sort((a, b) => a[0].x - b[0].x);
+        let frameData = [];
 
         for (const landmarks of sortedHands) {
-
-            drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS);
-            drawLandmarks(canvasCtx, landmarks);
+            drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, { color: '#6366f1', lineWidth: 2 });
+            drawLandmarks(canvasCtx, landmarks, { color: '#ffffff', lineWidth: 1, radius: 2 });
 
             for (let i = 0; i < landmarks.length; i++) {
-                frameData.push(landmarks[i].x);
-                frameData.push(landmarks[i].y);
-                frameData.push(landmarks[i].z);
+                frameData.push(landmarks[i].x, landmarks[i].y, landmarks[i].z);
             }
         }
-    }
 
-    // Force 126 features (2 hands max)
-    while (frameData.length < 126) {
-        frameData.push(0);
-    }
-
-    // ===============================
-    // DATA COLLECTION
-    // ===============================
-
-    if (collecting && frameData.length === 126) {
-        dataset.push([...frameData, currentLabel]);
-    }
-
-    // ===============================
-    // PREDICTION
-    // ===============================
-
-    if (!collecting && frameData.length === 126) {
+        while (frameData.length < 126) frameData.push(0);
 
         fetch("/predict", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ landmarks: frameData })
         })
-        .then(res => res.json())
-        .then(data => {
+            .then(res => res.json())
+            .then(data => {
+                const predictionBox = document.getElementById("predictionText");
+                const subtitle = document.getElementById("subtitleOverlay");
+                const confBar = document.getElementById("confidenceBar");
 
-            const predictionBox =
-                document.getElementById("predictionText");
+                if (data.prediction === "Uncertain") {
+                    predictionBox.innerText = "Detecting...";
+                    subtitle.innerText = "Waiting for clear gesture";
+                    confBar.style.width = "0%";
+                    return;
+                }
 
-            if (data.prediction === "Uncertain") {
-                predictionBox.innerText = "Prediction: Uncertain";
-                document.getElementById("subtitleOverlay").innerText =
-                    "Waiting...";
-                return;
-            }
+                const currentWord = data.prediction;
+                const confPercent = (data.confidence * 100).toFixed(0);
 
-            const currentWord = data.prediction;
+                predictionBox.innerText = currentWord;
+                subtitle.innerText = `${confPercent}% confidence`;
+                confBar.style.width = `${confPercent}%`;
 
-            predictionBox.innerText =
-                `Prediction: ${currentWord} (${(data.confidence * 100).toFixed(1)}%)`;
-
-            document.getElementById("subtitleOverlay").innerText =
-                currentWord;
-
-            // Add word only if changed
-            if (currentWord !== lastWord) {
-                sentence += currentWord + " ";
-                lastWord = currentWord;
-                document.getElementById("sentenceBox").innerText =
-                    sentence;
-            }
-
-            document.getElementById("confidenceBar").style.width =
-    (data.confidence * 100) + "%";
-
-const historyBox = document.getElementById("historyBox");
-const chip = document.createElement("span");
-chip.innerText = currentWord;
-historyBox.prepend(chip);
-
-if (historyBox.children.length > 10) {
-    historyBox.removeChild(historyBox.lastChild);
-}
-
-        })
-        .catch(err => console.error("Prediction error:", err));
+                if (currentWord !== lastWord && data.confidence > 0.6) {
+                    if (currentWord.length === 1 && lastWord.length === 1) {
+                        sentence = sentence.trim() + currentWord + " ";
+                    } else {
+                        sentence += currentWord + " ";
+                    }
+                    lastWord = currentWord;
+                    document.getElementById("sentenceBox").innerText = sentence;
+                }
+            })
+            .catch(err => console.error("Predict error:", err));
+    } else {
+        document.getElementById("confidenceBar").style.width = "0%";
     }
 
     canvasCtx.restore();
 }
 
+// ===============================
+// CORE CONTROLS
+// ===============================
 
-// ===============================
-// CLEAR + SPEAK
-// ===============================
+function toggleMic() {
+    isMicOn = !isMicOn;
+    localStream.getAudioTracks().forEach(track => track.enabled = isMicOn);
+
+    const btn = document.getElementById("micBtn");
+    btn.classList.toggle("btn-off", !isMicOn);
+    btn.innerHTML = isMicOn ? '<i data-lucide="mic"></i>' : '<i data-lucide="mic-off"></i>';
+    lucide.createIcons();
+}
+
+function toggleCamera() {
+    isCamOn = !isCamOn;
+    localStream.getVideoTracks().forEach(track => track.enabled = isCamOn);
+
+    const btn = document.getElementById("camBtn");
+    btn.classList.toggle("btn-off", !isCamOn);
+    btn.innerHTML = isCamOn ? '<i data-lucide="video"></i>' : '<i data-lucide="video-off"></i>';
+    lucide.createIcons();
+}
 
 function clearSentence() {
     sentence = "";
     lastWord = "";
-    document.getElementById("sentenceBox").innerText = "";
+    document.getElementById("sentenceBox").innerText = "Waiting for results...";
 }
 
 function speakSentence() {
-    if (!sentence) return;
+    const text = document.getElementById("sentenceBox").innerText;
+    if (!text || text === "Waiting for results...") return;
 
-    const utterance =
-        new SpeechSynthesisUtterance(sentence);
+    const utterance = new SpeechSynthesisUtterance(text);
 
-    utterance.rate = 0.9;
-    speechSynthesis.speak(utterance);
+    // Choose a clear English female voice
+    const voices = window.speechSynthesis.getVoices();
+    const femaleVoice = voices.find(v =>
+        v.lang.startsWith('en') && (
+            v.name.includes('Samantha') ||
+            v.name.includes('Victoria') ||
+            v.name.includes('Zira') ||
+            v.name.includes('Female')
+        )
+    ) || voices.find(v => v.lang.startsWith('en'));
+
+    if (femaleVoice) {
+        utterance.voice = femaleVoice;
+    }
+
+    // Adjust rate and pitch for a slower, completely understandable voice
+    utterance.rate = 0.75;
+    utterance.pitch = 1.1;
+
+    window.speechSynthesis.speak(utterance);
 }
 
-
 // ===============================
-// DOWNLOAD DATASET
+// SPEECH RECOGNITION (VOICE TO TEXT)
 // ===============================
 
-function downloadCSV() {
-
-    if (dataset.length === 0) {
-        alert("No data collected!");
+function initSpeechRecognition() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+        console.error("Speech Recognition not supported");
         return;
     }
 
-    let csvContent =
-        dataset.map(row => row.join(",")).join("\n");
+    recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
 
-    const blob =
-        new Blob([csvContent], { type: "text/csv" });
-
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "gesture_data.csv";
-    a.click();
-
-    URL.revokeObjectURL(url);
-}
-
-
-// ===============================
-// SPEECH RECOGNITION
-// ===============================
-
-function startSpeech() {
-
-    const recognition =
-        new (window.SpeechRecognition ||
-             window.webkitSpeechRecognition)();
-
-    recognition.lang = "en-US";
-    recognition.start();
-
-    recognition.onresult = function(event) {
-        const transcript =
-            event.results[0][0].transcript;
-
-        document.getElementById("speechText").innerText =
-            "Speech: " + transcript;
+    recognition.onresult = (event) => {
+        let interimTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+                sentence += event.results[i][0].transcript + " ";
+            } else {
+                interimTranscript += event.results[i][0].transcript;
+            }
+        }
+        document.getElementById("sentenceBox").innerText = sentence + (interimTranscript ? ` (${interimTranscript})` : "");
     };
+
+    recognition.onerror = (event) => console.error("Speech recognition error:", event.error);
+    recognition.onend = () => { if (isSpeechOn) recognition.start(); };
 }
 
-// ===============================
-// SIMPLE LOCAL WEBRTC (2 TAB DEMO)
-// ===============================
+function toggleSpeech() {
+    if (!recognition) return;
+    isSpeechOn = !isSpeechOn;
 
-let peerConnection;
-let socket;
+    const btn = document.getElementById("voiceBtn");
+    btn.classList.toggle("btn-primary", isSpeechOn);
+    btn.classList.toggle("btn-secondary", !isSpeechOn);
 
-const config = {
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-};
-
-function joinRoom() {
-
-    const room = document.getElementById("roomInput").value;
-
-    if (!room) {
-        alert("Enter Room ID");
-        return;
+    if (isSpeechOn) {
+        recognition.start();
+        document.getElementById("sentenceBox").innerText = "Listening...";
+    } else {
+        recognition.stop();
     }
+}
 
-    socket = new WebSocket("ws://localhost:3000");
+// ===============================
+// WEBRTC SIGNALING (via SocketIO)
+// ===============================
 
-    socket.onopen = () => {
-        socket.send(JSON.stringify({ type: "join", room }));
-    };
+function generateRoomCode() {
+    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    document.getElementById("roomInput").value = code;
+}
 
-    socket.onmessage = async (event) => {
+function copyRoomCode() {
+    const code = document.getElementById("roomInput").value;
+    if (!code) return;
+    navigator.clipboard.writeText(code);
+    alert("Room code copied: " + code);
+}
 
-        const message = JSON.parse(event.data);
+function copyTranscript() {
+    const text = document.getElementById("sentenceBox").innerText;
+    if (!text || text === "Waiting for results...") return;
+    navigator.clipboard.writeText(text);
+    alert("Transcript copied to clipboard!");
+}
 
-        if (message.type === "role") {
+function unlockRemoteVideo() {
+    document.getElementById("remoteOverlay").style.display = "none";
+    remoteVideo.muted = false;
+    remoteVideo.play();
+}
 
-            await createPeer();
+async function joinRoom() {
+    const room = document.getElementById("roomInput").value.trim();
+    if (!room) return alert("Please enter a room code");
 
-            if (message.initiator) {
-                const offer = await peerConnection.createOffer();
-                await peerConnection.setLocalDescription(offer);
+    if (socket) socket.disconnect();
+    if (peerConnection) peerConnection.close();
 
-                socket.send(JSON.stringify({
-                    type: "offer",
-                    offer
-                }));
+    // Connect via SocketIO
+    socket = io();
+
+    socket.on('connect', () => {
+        console.log("Connected to signal server");
+        socket.emit('join_room', { room });
+        currentRoom = room;
+
+        updateConnectionUI(true, room);
+    });
+
+    let isInitiator = false;
+    let candidateQueue = [];
+
+    socket.on('role', (data) => {
+        isInitiator = data.initiator;
+        createPeer(room);
+    });
+
+    socket.on('peer_joined', async () => {
+        if (isInitiator) {
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            socket.emit('signal', { type: "offer", offer, room });
+        }
+    });
+
+    socket.on('signal', async (data) => {
+        if (data.type === "offer") {
+            createPeer(room);
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+            candidateQueue.forEach(c => peerConnection.addIceCandidate(new RTCIceCandidate(c)));
+            candidateQueue = [];
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            socket.emit('signal', { type: "answer", answer, room });
+        }
+
+        if (data.type === "answer") {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+            candidateQueue.forEach(c => peerConnection.addIceCandidate(new RTCIceCandidate(c)));
+            candidateQueue = [];
+        }
+
+        if (data.type === "candidate") {
+            const cand = new RTCIceCandidate(data.candidate);
+            if (peerConnection && peerConnection.remoteDescription) {
+                peerConnection.addIceCandidate(cand);
+            } else {
+                candidateQueue.push(data.candidate);
             }
         }
 
-        if (message.type === "offer") {
-
-            await peerConnection.setRemoteDescription(
-                new RTCSessionDescription(message.offer)
-            );
-
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
-
-            socket.send(JSON.stringify({
-                type: "answer",
-                answer
-            }));
+        if (data.type === "chat") {
+            appendChatMessage(data.message, "Remote");
         }
 
-        if (message.type === "answer") {
-            await peerConnection.setRemoteDescription(
-                new RTCSessionDescription(message.answer)
-            );
+        if (data.type === "leave") {
+            handlePeerLeave();
         }
-
-        if (message.type === "candidate") {
-            await peerConnection.addIceCandidate(
-                new RTCIceCandidate(message.candidate)
-            );
-        }
-    };
+    });
 }
 
-async function createPeer() {
-
+function createPeer(room) {
+    if (peerConnection) return;
     peerConnection = new RTCPeerConnection(config);
 
-    localStream.getTracks().forEach(track => {
-        peerConnection.addTrack(track, localStream);
-    });
+    if (localStream) {
+        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+    }
 
-    peerConnection.ontrack = event => {
+    peerConnection.ontrack = (event) => {
         remoteVideo.srcObject = event.streams[0];
+        remoteVideo.muted = true;
+        remoteVideo.play().then(() => {
+            document.getElementById("remoteOverlay").style.display = "none";
+            remoteVideo.muted = false;
+        }).catch(() => {
+            document.getElementById("remoteOverlay").style.display = "flex";
+        });
     };
 
-    peerConnection.onicecandidate = event => {
+    peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
-            socket.send(JSON.stringify({
-                type: "candidate",
-                candidate: event.candidate
-            }));
+            socket.emit('signal', { type: "candidate", candidate: event.candidate, room });
+        }
+    };
+
+    peerConnection.oniceconnectionstatechange = () => {
+        if (peerConnection.iceConnectionState === 'disconnected') {
+            handlePeerLeave();
         }
     };
 }
+
+function leaveRoom() {
+    if (socket) {
+        socket.emit('signal', { type: "leave", room: currentRoom });
+        socket.disconnect();
+    }
+    if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+    }
+
+    remoteVideo.srcObject = null;
+    document.getElementById("remoteOverlay").style.display = "flex";
+    updateConnectionUI(false);
+    currentRoom = null;
+}
+
+function handlePeerLeave() {
+    remoteVideo.srcObject = null;
+    document.getElementById("remoteOverlay").style.display = "flex";
+    if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+    }
+    // Re-create peer to wait for next connection
+    if (currentRoom) createPeer(currentRoom);
+}
+
+function updateConnectionUI(connected, room = "") {
+    const status = document.getElementById("connectionStatus");
+    const joinBtn = document.getElementById("joinBtn");
+    const leaveBtn = document.getElementById("leaveBtn");
+
+    if (connected) {
+        status.innerText = "In Room: " + room;
+        status.style.color = "#10b981";
+        status.style.borderColor = "rgba(16, 185, 129, 0.2)";
+        status.style.background = "rgba(16, 185, 129, 0.1)";
+        joinBtn.style.display = "none";
+        leaveBtn.style.display = "inline-flex";
+    } else {
+        status.innerText = "Disconnected";
+        status.style.color = "#ef4444";
+        status.style.borderColor = "rgba(239, 68, 68, 0.2)";
+        status.style.background = "rgba(239, 68, 68, 0.1)";
+        joinBtn.style.display = "inline-flex";
+        leaveBtn.style.display = "none";
+    }
+}
+
+// ===============================
+// CHAT FUNCTIONALITY
+// ===============================
+
+function handleChatKey(e) {
+    if (e.key === 'Enter') sendChatMessage();
+}
+
+function sendChatMessage() {
+    const input = document.getElementById("chatInput");
+    const msg = input.value.trim();
+    if (!msg) return;
+
+    if (socket && currentRoom) {
+        socket.emit('signal', { type: "chat", message: msg, room: currentRoom });
+    }
+
+    appendChatMessage(msg, "You");
+    input.value = "";
+
+    // Auto turn off dictation after sending
+    if (isChatSpeechOn) toggleChatSpeech(false);
+}
+
+function clearChatMessages() {
+    document.getElementById("chatMessages").innerHTML = "";
+}
+
+function appendChatMessage(msg, sender) {
+    const box = document.getElementById("chatMessages");
+    const div = document.createElement("div");
+    div.className = sender === "You" ? "chat-msg chat-msg-self" : "chat-msg";
+    div.innerHTML = `<strong>${sender}:</strong> ${msg}`;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+}
+
+// ==== CHAT DICTATION (VOICE TO TEXT) ====
+function initChatSpeech() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+        console.error("Speech Recognition not supported");
+        return;
+    }
+
+    chatRecognition = new SpeechRecognition();
+    chatRecognition.continuous = false; // Stop when the user stops talking
+    chatRecognition.interimResults = true;
+    chatRecognition.lang = 'en-US';
+
+    chatRecognition.onstart = () => {
+        isChatSpeechOn = true;
+        updateChatMicUI(true);
+    };
+
+    chatRecognition.onresult = (event) => {
+        let interimTranscript = '';
+        let finalTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+                finalTranscript += event.results[i][0].transcript;
+            } else {
+                interimTranscript += event.results[i][0].transcript;
+            }
+        }
+
+        const input = document.getElementById("chatInput");
+        if (finalTranscript) {
+            const currentVal = input.value.trim();
+            input.value = currentVal ? `${currentVal} ${finalTranscript}` : finalTranscript;
+            input.placeholder = "Send a message...";
+        } else {
+            input.placeholder = "Hearing: " + interimTranscript + "...";
+        }
+    };
+
+    chatRecognition.onerror = (event) => updateChatMicUI(false);
+    chatRecognition.onend = () => updateChatMicUI(false);
+}
+
+function updateChatMicUI(isActive) {
+    isChatSpeechOn = isActive;
+    const btn = document.getElementById("chatMicBtn");
+    const iconColor = isActive ? "#ef4444" : "#a1a1aa";
+
+    btn.innerHTML = `<i data-lucide="mic" style="width: 16px; color: ${iconColor};"></i>`;
+    lucide.createIcons();
+
+    if (!isActive && document.getElementById("chatInput").placeholder.startsWith("Hearing")) {
+        document.getElementById("chatInput").placeholder = "Send a message...";
+    }
+}
+
+function toggleChatSpeech(forceState) {
+    if (!chatRecognition) initChatSpeech();
+    if (!chatRecognition) return alert("Speech recognition not supported in this browser.");
+
+    const targetState = forceState !== undefined ? forceState : !isChatSpeechOn;
+
+    if (targetState) {
+        try {
+            chatRecognition.start();
+        } catch (e) {
+            console.error("Dictation already started", e);
+        }
+    } else {
+        chatRecognition.stop();
+        updateChatMicUI(false);
+    }
+}
+
