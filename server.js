@@ -3,12 +3,26 @@ const http = require('http');
 const { Server } = require('socket.io');
 
 const path = require('path');
+const { auth, requiresAuth } = require('express-openid-connect');
+require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: { origin: "*" }
 });
+
+const configAuth = {
+    authRequired: false,
+    auth0Logout: true,
+    secret: process.env.AUTH0_SECRET || 'a_long_random_string_at_least_32_characters_long',
+    baseURL: process.env.AUTH0_BASE_URL || 'http://localhost:3000',
+    clientID: process.env.AUTH0_CLIENT_ID,
+    issuerBaseURL: process.env.AUTH0_ISSUER_BASE_URL
+};
+
+// auth router attaches /login, /logout, and /callback routes to the baseURL
+app.use(auth(configAuth));
 
 // Native fetch proxy for Python Predictions
 app.use(express.json());
@@ -37,12 +51,17 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.get('/app', (req, res) => {
+app.get('/app', requiresAuth(), (req, res) => {
     res.sendFile(path.join(__dirname, 'templates', 'index.html'));
 });
 
-app.get('/collect', (req, res) => {
+app.get('/collect', requiresAuth(), (req, res) => {
     res.sendFile(path.join(__dirname, 'templates', 'collect.html'));
+});
+
+// User Endpoint
+app.get('/user', (req, res) => {
+    res.json(req.oidc.isAuthenticated() ? req.oidc.user : null);
 });
 
 // Proxy /save_sample to Flask

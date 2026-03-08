@@ -93,6 +93,7 @@ async function startVideo() {
 
         camera.start();
         initSpeechRecognition();
+        updateAuthUI();
 
     } catch (err) {
         console.error("Camera error:", err);
@@ -829,4 +830,37 @@ async function speakText(text) {
     utterance.pitch = 1.0;
     utterance.volume = 1.0;
     window.speechSynthesis.speak(utterance);
+}
+
+// ===============================
+// AUTH0 UI UPDATES
+// ===============================
+
+async function updateAuthUI() {
+    try {
+        const response = await fetch('/user');
+        const user = await response.json();
+        const authSection = document.getElementById('authSection');
+
+        if (user) {
+            authSection.innerHTML = `
+                <div class="user-pill" title="${user.email}">
+                    <img src="${user.picture}" alt="${user.name}" class="user-avatar">
+                    <span class="user-name">${user.nickname || user.name}</span>
+                    <a href="/logout" class="btn-logout" title="Sign Out">
+                        <i data-lucide="log-out" style="width: 14px;"></i>
+                    </a>
+                </div>
+            `;
+        } else {
+            authSection.innerHTML = `
+                <a href="/login" class="btn btn-primary" style="padding: 6px 14px; font-size: 13px;">
+                    <i data-lucide="log-in" style="width: 14px;"></i> Login
+                </a>
+            `;
+        }
+        lucide.createIcons();
+    } catch (err) {
+        console.error("Auth UI Error:", err);
+    }
 }

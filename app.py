@@ -3,6 +3,9 @@ import numpy as np
 import joblib
 import os
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 # Enable SocketIO for real-time signaling if needed, but not for WebRTC anymore
