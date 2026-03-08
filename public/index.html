@@ -11,10 +11,20 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <!-- Kill any rogue Service Workers -->
   <script>
-      if ('serviceWorker' in navigator)         navigator.serviceWorker.getRegistrations().then(funct ion(registrations)           for (let registration of registrations)          ion.unregister(); }
-                       keys      function(cacheNames) {
-           cacheName        function(cacheName) { cache s.delete(cache                 });
-      }
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function (registrations) {
+        for (let registration of registrations) {
+          registration.unregister();
+        }
+      });
+    }
+    if ('caches' in window) {
+      caches.keys().then(function (cacheNames) {
+        cacheNames.forEach(function (cacheName) {
+          caches.delete(cacheName);
+        });
+      });
+    }
   </script>
   <script type="module" crossorigin src="/assets/index-X0u1IO0O.js"></script>
   <link rel="stylesheet" crossorigin href="/assets/index-CW0SZQFY.css">
