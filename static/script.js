@@ -38,9 +38,24 @@ canvasElement.height = 480;
 
 const config = {
     iceServers: [
-        { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }
+        { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302", "stun:stun2.l.google.com:19302", "stun:stun3.l.google.com:19302", "stun:stun4.l.google.com:19302"] }
     ]
 };
+
+// Initialize Socket immediately to show connection status
+socket = io({
+    transports: ['polling', 'websocket'],
+    upgrade: true
+});
+
+socket.on('connect', () => {
+    console.log("Connected to signaling server");
+    updateConnectionUI(true);
+});
+
+socket.on('disconnect', () => {
+    updateConnectionUI(false);
+});
 
 // ===============================
 // INITIALIZATION
@@ -389,19 +404,23 @@ async function joinRoom() {
     const room = document.getElementById("roomInput").value.trim();
     if (!room) return showToast("⚠️ Please enter a room code");
 
-    if (socket) socket.disconnect();
-    if (peerConnection) peerConnection.close();
+    // Re-use existing socket if possible, otherwise reconnect
+    if (!socket || !socket.connected) {
+        socket = io({
+            transports: ['polling', 'websocket'],
+            upgrade: true
+        });
+    }
 
-    // Connect via SocketIO
-    socket = io();
+    // Clear previous room listeners
+    socket.off('role');
+    socket.off('peer_joined');
+    socket.off('signal');
 
-    socket.on('connect', () => {
-        console.log("Connected to signal server");
-        socket.emit('join_room', { room });
-        currentRoom = room;
+    socket.emit('join_room', { room });
+    currentRoom = room;
 
-        updateConnectionUI(true, room);
-    });
+    updateConnectionUI(true, room);
 
     let isInitiator = false;
     let candidateQueue = [];
