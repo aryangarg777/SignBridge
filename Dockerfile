@@ -25,11 +25,12 @@ RUN npm install
 # Copy application code
 COPY . .
 
-# Expose the Node port
+# Expose the Node port and Python port (though Python is internal)
 EXPOSE 3000
+EXPOSE 5001
 
 # Set environment variable so the node server binds to the correct port
 ENV PORT=3000
 
-# Run concurrently
-CMD ["npx", "concurrently", "\"PYTHON_PORT=5001 python3 app.py\"", "\"node server.js\""]
+# Run concurrently with gunicorn for stability
+CMD ["npx", "concurrently", "--kill-others", "\"gunicorn --bind 0.0.0.0:5001 --workers 1 --timeout 120 app:app\"", "\"node server.js\""]
