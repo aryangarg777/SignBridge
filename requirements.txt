@@ -5,3 +5,4 @@ scikit-learn==1.6.1
 flask-socketio==5.4.1
 eventlet==0.39.0
 gunicorn==23.0.0
+requests==2.31.0

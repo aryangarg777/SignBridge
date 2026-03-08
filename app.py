@@ -1,8 +1,9 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response
 import numpy as np
 import joblib
 from flask_socketio import SocketIO, join_room, leave_room, send, emit
 import os
+import requests
 
 app = Flask(__name__)
 # Enable SocketIO for real-time signaling
@@ -118,6 +119,45 @@ def predict():
         "confidence": float(confidence)
     })
 
+@app.route('/speak', methods=['POST'])
+def speak():
+    data = request.json
+    text = data.get("text", "")
+    voice_id = data.get("voice_id", "21m00Tcm4TlvDq8ikWAM") # Default voice: Rachel
+    
+    api_key = os.environ.get("ELEVENLABS_API_KEY")
+    if not api_key:
+        return jsonify({"error": "Missing ELEVENLABS_API_KEY environment variable"}), 400
+        
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+    headers = {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": api_key
+    }
+    payload = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75
+        }
+    }
+    
+    try:
+        response = requests.post(url, json=payload, headers=headers, stream=True)
+        if response.status_code != 200:
+            return jsonify({"error": "ElevenLabs API Error", "details": response.text}), response.status_code
+            
+        def generate():
+            for chunk in response.iter_content(chunk_size=1024):
+                if chunk:
+                    yield chunk
+                    
+        return Response(generate(), mimetype="audio/mpeg")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 # ===============================
 # WebRTC Signaling via SocketIO
 # ===============================
@@ -164,7 +204,7 @@ def on_disconnect():
             break
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5001))
+    port = int(os.environ.get("PYTHON_PORT", 5001))
     # Note: For production use gunicorn + eventlet (Waitress for windows)
     socketio.run(app, host="0.0.0.0", port=port, debug=False)
 

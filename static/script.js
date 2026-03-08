@@ -10,10 +10,23 @@ let peerConnection = null;
 let socket = null;
 let isMicOn = true;
 let isCamOn = true;
+let isMLOn = true;
 let isSpeechOn = false;
 let isChatSpeechOn = false;
 let recognition = null;
 let chatRecognition = null;
+let gestureCount = 0;
+
+// ===============================
+// TOAST NOTIFICATIONS
+// ===============================
+function showToast(message, duration = 2500) {
+    const toast = document.getElementById('toast');
+    if (!toast) return;
+    toast.textContent = message;
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), duration);
+}
 
 const localVideo = document.getElementById("localVideo");
 const remoteVideo = document.getElementById("remoteVideo");
@@ -68,7 +81,7 @@ async function startVideo() {
 
     } catch (err) {
         console.error("Camera error:", err);
-        alert("Camera permission denied. Please allow access to use SignBridge.");
+        showToast("⚠️ Camera permission denied. Please allow access.");
     }
 }
 
@@ -98,6 +111,11 @@ function onResults(results) {
 
         while (frameData.length < 126) frameData.push(0);
 
+        if (!isMLOn) {
+            canvasCtx.restore();
+            return;
+        }
+
         fetch("/predict", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -123,6 +141,17 @@ function onResults(results) {
                 subtitle.innerText = `${confPercent}% confidence`;
                 confBar.style.width = `${confPercent}%`;
 
+                // Visual pulse on subtitle box
+                const subtitleBox = document.getElementById('subtitleBox');
+                if (subtitleBox) {
+                    subtitleBox.classList.add('pulse');
+                    setTimeout(() => subtitleBox.classList.remove('pulse'), 400);
+                }
+
+                // Glow effect on video card
+                const localCard = document.getElementById('localCard');
+                if (localCard) localCard.classList.add('detecting');
+
                 if (currentWord !== lastWord && data.confidence > 0.6) {
                     if (currentWord.length === 1 && lastWord.length === 1) {
                         sentence = sentence.trim() + currentWord + " ";
@@ -131,11 +160,18 @@ function onResults(results) {
                     }
                     lastWord = currentWord;
                     document.getElementById("sentenceBox").innerText = sentence;
+
+                    // Update gesture counter
+                    gestureCount++;
+                    const countEl = document.getElementById('gestureCount');
+                    if (countEl) countEl.textContent = gestureCount;
                 }
             })
             .catch(err => console.error("Predict error:", err));
     } else {
         document.getElementById("confidenceBar").style.width = "0%";
+        const localCard = document.getElementById('localCard');
+        if (localCard) localCard.classList.remove('detecting');
     }
 
     canvasCtx.restore();
@@ -165,36 +201,109 @@ function toggleCamera() {
     lucide.createIcons();
 }
 
+function toggleML() {
+    isMLOn = !isMLOn;
+    const btn = document.getElementById("mlBtn");
+    btn.classList.toggle("btn-off", !isMLOn);
+    btn.innerHTML = isMLOn ? '<i data-lucide="brain"></i>' : '<i data-lucide="brain-cog"></i>';
+    lucide.createIcons();
+
+    const predictionBox = document.getElementById("predictionText");
+    const subtitle = document.getElementById("subtitleOverlay");
+    const confBar = document.getElementById("confidenceBar");
+    if (!isMLOn) {
+        predictionBox.innerText = "ML Paused";
+        subtitle.innerText = "Prediction disabled";
+        confBar.style.width = "0%";
+    } else {
+        predictionBox.innerText = "Detecting...";
+        subtitle.innerText = "Waiting for gesture...";
+    }
+}
+
 function clearSentence() {
     sentence = "";
     lastWord = "";
     document.getElementById("sentenceBox").innerText = "Waiting for results...";
 }
 
-function speakSentence() {
-    const text = document.getElementById("sentenceBox").innerText;
-    if (!text || text === "Waiting for results...") return;
+// Preload voices (browsers load them asynchronously)
+let cachedVoices = [];
+function loadVoices() {
+    cachedVoices = window.speechSynthesis.getVoices();
+}
+window.speechSynthesis.onvoiceschanged = loadVoices;
+loadVoices();
 
-    const utterance = new SpeechSynthesisUtterance(text);
+function getBestVoice() {
+    const voices = cachedVoices.length ? cachedVoices : window.speechSynthesis.getVoices();
+    if (!voices.length) return null;
 
-    // Choose a clear English female voice
-    const voices = window.speechSynthesis.getVoices();
-    const femaleVoice = voices.find(v =>
-        v.lang.startsWith('en') && (
-            v.name.includes('Samantha') ||
-            v.name.includes('Victoria') ||
-            v.name.includes('Zira') ||
-            v.name.includes('Female')
-        )
-    ) || voices.find(v => v.lang.startsWith('en'));
+    // Prioritize Indian English voices (macOS & Chrome)
+    const preferred = [
+        'Rishi',          // macOS Indian male
+        'Veena',          // macOS Indian female
+        'Google UK English Female', // Good clear fallback
+        'Samantha'        // clear fallback
+    ];
 
-    if (femaleVoice) {
-        utterance.voice = femaleVoice;
+    // Try finding exact Indian accent preference
+    for (const name of preferred) {
+        const match = voices.find(v => v.name.includes(name) || (v.lang === 'en-IN'));
+        if (match) return match;
     }
 
-    // Adjust rate and pitch for a slower, completely understandable voice
-    utterance.rate = 0.75;
-    utterance.pitch = 1.1;
+    // Fallback: any en-IN voice, or just en voice
+    return voices.find(v => v.lang === 'en-IN') || voices.find(v => v.lang.startsWith('en')) || voices[0];
+}
+
+async function speakSentence() {
+    const text = document.getElementById("sentenceBox").innerText;
+    if (!text || text === "Waiting for results..." || text === "ML Paused") return;
+
+    // Stop any currently playing local speech
+    window.speechSynthesis.cancel();
+
+    // Try ElevenLabs via backend
+    try {
+        const response = await fetch("/speak", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: text })
+        });
+
+        if (response.ok) {
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const audio = new Audio(url);
+
+            // Slow down the ElevenLabs voice slightly
+            audio.playbackRate = 0.85;
+            audio.preservesPitch = true;
+
+            audio.play();
+            return;
+        } else {
+            const errData = await response.json().catch(() => ({}));
+            if (errData.error && errData.error.includes("ELEVENLABS_API_KEY")) {
+                console.warn("ElevenLabs API key missing, falling back to local TTS");
+            } else {
+                console.error("ElevenLabs error:", errData);
+            }
+        }
+    } catch (e) {
+        console.error("Fetch error calling /speak:", e);
+    }
+
+    // Fallback: Local Browser TTS
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voice = getBestVoice();
+    if (voice) utterance.voice = voice;
+
+    // Slower pacing for better comprehension
+    utterance.rate = 0.82;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
 
     window.speechSynthesis.speak(utterance);
 }
@@ -260,14 +369,14 @@ function copyRoomCode() {
     const code = document.getElementById("roomInput").value;
     if (!code) return;
     navigator.clipboard.writeText(code);
-    alert("Room code copied: " + code);
+    showToast("✅ Room code copied: " + code);
 }
 
 function copyTranscript() {
     const text = document.getElementById("sentenceBox").innerText;
     if (!text || text === "Waiting for results...") return;
     navigator.clipboard.writeText(text);
-    alert("Transcript copied to clipboard!");
+    showToast("📋 Transcript copied!");
 }
 
 function unlockRemoteVideo() {
@@ -278,7 +387,7 @@ function unlockRemoteVideo() {
 
 async function joinRoom() {
     const room = document.getElementById("roomInput").value.trim();
-    if (!room) return alert("Please enter a room code");
+    if (!room) return showToast("⚠️ Please enter a room code");
 
     if (socket) socket.disconnect();
     if (peerConnection) peerConnection.close();
@@ -522,7 +631,7 @@ function updateChatMicUI(isActive) {
 
 function toggleChatSpeech(forceState) {
     if (!chatRecognition) initChatSpeech();
-    if (!chatRecognition) return alert("Speech recognition not supported in this browser.");
+    if (!chatRecognition) return showToast("⚠️ Speech recognition not supported in this browser.");
 
     const targetState = forceState !== undefined ? forceState : !isChatSpeechOn;
 
@@ -538,3 +647,167 @@ function toggleChatSpeech(forceState) {
     }
 }
 
+// ===============================
+// TEXT TO SPEECH (TTS) PANEL
+// ===============================
+
+function handleTTSKey(e) {
+    if (e.key === 'Enter') speakTTSInput();
+}
+
+function speakTTSInput() {
+    const input = document.getElementById("ttsInput");
+    const text = input.value.trim();
+    if (!text) return;
+
+    // Speak audio
+    speakText(text);
+
+    // Add to History
+    appendTTSHistory(text);
+
+    // Optionally broadcast to chat if connected
+    if (socket && currentRoom) {
+        socket.emit('signal', { type: "chat", message: text, room: currentRoom });
+    }
+    appendChatMessage(text, "You");
+
+    // Clear input
+    input.value = "";
+}
+
+function clearTTSInput() {
+    document.getElementById("ttsInput").value = "";
+    document.getElementById("ttsInput").focus();
+}
+
+function appendTTSHistory(text) {
+    const historyBox = document.getElementById("ttsHistory");
+    if (!historyBox) return;
+
+    const div = document.createElement("div");
+    div.className = "tts-history-item";
+    div.innerText = text;
+    div.onclick = () => {
+        speakText(text);
+        if (socket && currentRoom) {
+            socket.emit('signal', { type: "chat", message: text, room: currentRoom });
+        }
+        appendChatMessage(text, "You");
+    };
+
+    historyBox.prepend(div);
+}
+
+// ===============================
+// ACCESSIBILITY FEATURES
+// ===============================
+
+// --- SOS EMERGENCY ALERT ---
+function triggerSOS() {
+    const sosMessage = "🚨 EMERGENCY — I NEED HELP IMMEDIATELY";
+    const sosBtn = document.querySelector('.sos-btn');
+
+    // Visual flash
+    sosBtn.classList.add('sos-active');
+    setTimeout(() => sosBtn.classList.remove('sos-active'), 1500);
+
+    // Set in sentence box
+    sentence = sosMessage + " ";
+    document.getElementById("sentenceBox").innerText = sosMessage;
+
+    // Auto-speak the alert
+    speakText("EMERGENCY. I NEED HELP IMMEDIATELY. Please help me.");
+
+    // Broadcast to chat if connected
+    if (socket && currentRoom) {
+        socket.emit('signal', { type: "chat", message: sosMessage, room: currentRoom });
+    }
+    appendChatMessage(sosMessage, "You");
+
+    showToast("🚨 SOS Alert Sent!");
+}
+
+// --- QUICK PHRASES ---
+function toggleQuickPhrases() {
+    const grid = document.getElementById('quickPhrasesGrid');
+    const toggle = document.getElementById('qpToggle');
+    const isVisible = grid.style.display !== 'none';
+
+    grid.style.display = isVisible ? 'none' : 'grid';
+    toggle.classList.toggle('active', !isVisible);
+    lucide.createIcons();
+}
+
+function usePhrase(phrase) {
+    // Add to sentence
+    sentence += phrase + " ";
+    document.getElementById("sentenceBox").innerText = sentence;
+
+    // Auto-speak
+    speakText(phrase);
+
+    // Broadcast to chat if connected
+    if (socket && currentRoom) {
+        socket.emit('signal', { type: "chat", message: phrase, room: currentRoom });
+    }
+    appendChatMessage(phrase, "You");
+
+    // Visual feedback
+    showToast(`💬 "${phrase}"`);
+}
+
+// --- EMOTION QUICK-REACT ---
+function sendEmotion(emotionText) {
+    // Add to sentence
+    sentence += emotionText + " ";
+    document.getElementById("sentenceBox").innerText = sentence;
+
+    // Speak the text part (skip emoji)
+    const textOnly = emotionText.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2702}-\u{27B0}\u{24C2}-\u{1F251}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{2600}-\u{26FF}\u{2700}-\u{27BF}❤️]/gu, '').trim();
+    speakText(textOnly);
+
+    // Broadcast to chat if connected
+    if (socket && currentRoom) {
+        socket.emit('signal', { type: "chat", message: emotionText, room: currentRoom });
+    }
+    appendChatMessage(emotionText, "You");
+}
+
+// --- SPEAK HELPER (for quick phrases and SOS) ---
+async function speakText(text) {
+    if (!text) return;
+
+    // Stop any currently playing speech
+    window.speechSynthesis.cancel();
+
+    // Try ElevenLabs
+    try {
+        const response = await fetch("/speak", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: text })
+        });
+
+        if (response.ok) {
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const audio = new Audio(url);
+            audio.playbackRate = 0.85;
+            audio.preservesPitch = true;
+            audio.play();
+            return;
+        }
+    } catch (e) {
+        console.error("ElevenLabs error:", e);
+    }
+
+    // Fallback: Local TTS
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voice = getBestVoice();
+    if (voice) utterance.voice = voice;
+    utterance.rate = 0.82;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
+    window.speechSynthesis.speak(utterance);
+}
