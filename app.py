@@ -1,13 +1,12 @@
 from flask import Flask, render_template, request, jsonify, Response
 import numpy as np
 import joblib
-from flask_socketio import SocketIO, join_room, leave_room, send, emit
 import os
 import requests
 
 app = Flask(__name__)
-# Enable SocketIO for real-time signaling
-socketio = SocketIO(app, cors_allowed_origins="*")
+# Enable SocketIO for real-time signaling if needed, but not for WebRTC anymore
+# socketio = SocketIO(app, cors_allowed_origins="*") # Not used for signaling anymore
 
 # Load trained files
 try:
@@ -158,53 +157,7 @@ def speak():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ===============================
-# WebRTC Signaling via SocketIO
-# ===============================
-
-rooms = {}
-
-@socketio.on('join_room')
-def on_join(data):
-    room = data['room']
-    join_room(room)
-    
-    if room not in rooms:
-        rooms[room] = []
-    
-    sid = request.sid
-    rooms[room].append(sid)
-    
-    print(f"User {sid} joined room {room}")
-
-    # Give role to connecting user
-    emit('role', {'initiator': len(rooms[room]) == 1}, to=sid)
-
-    # If a second person joins, tell the first person to start offering
-    if len(rooms[room]) == 2:
-        first_user = rooms[room][0]
-        emit('peer_joined', {}, to=first_user)
-
-@socketio.on('signal')
-def on_signal(data):
-    # Broadcast signaling data (offer, answer, candidate) to others in the room
-    room = data.get('room')
-    if room:
-        emit('signal', data, room=room, include_self=False)
-
-@socketio.on('disconnect')
-def on_disconnect():
-    sid = request.sid
-    for room, users in rooms.items():
-        if sid in users:
-            users.remove(sid)
-            print(f"User {sid} left room {room}")
-            if len(users) == 0:
-                del rooms[room]
-            break
-
 if __name__ == "__main__":
     port = int(os.environ.get("PYTHON_PORT", 5001))
-    # Note: For production use gunicorn + eventlet (Waitress for windows)
-    socketio.run(app, host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port)
 
